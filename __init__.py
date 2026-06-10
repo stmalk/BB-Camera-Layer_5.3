@@ -45,13 +45,20 @@ def _set_image_format(image_settings, file_format, codec=None):
         image_settings.exr_codec = codec
 
 
-def _filepath_with_layer(base, layer_name):
-    """Insert /<LayerName> subfolder before the filename stub."""
-    base = base.rstrip('/\\')
-    head, tail = os.path.split(base)
-    if not head:
-        head, tail = base, ''
-    return os.path.join(head, layer_name, tail) if tail else os.path.join(head, layer_name) + os.sep
+def _filepath_for_layer(scene, base, layer_name):
+    """Build the output filepath stub for a render layer.
+
+    The filename stub is always the (sanitized) layer name. The directory
+    depends on the scene's output-location settings:
+      - bb_output_separate_folders: <RenderDir>/<LayerName>/<LayerName>_
+      - otherwise (same as render settings): <RenderDir>/<LayerName>_
+    """
+    abs_base = bpy.path.abspath(base).rstrip('/\\')
+    out_dir  = os.path.dirname(abs_base) or abs_base
+    safe_name = layer_name.replace(" ", "_").replace(".", "_")
+    if scene.bb_output_separate_folders:
+        out_dir = os.path.join(out_dir, safe_name)
+    return os.path.join(out_dir, safe_name + "_")
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +123,16 @@ def _on_intercept_toggle(self, context):
         _unregister_keymap()
 
 
+def _on_same_as_render_toggle(self, context):
+    if context.scene.bb_output_same_as_render:
+        context.scene.bb_output_separate_folders = False
+
+
+def _on_separate_folders_toggle(self, context):
+    if context.scene.bb_output_separate_folders:
+        context.scene.bb_output_same_as_render = False
+
+
 # ---------------------------------------------------------------------------
 # Operator – separate EXRs (non-multilayer)
 # ---------------------------------------------------------------------------
@@ -159,7 +176,7 @@ class BB_OT_RenderAllLayers(Operator):
             if cam:
                 scene.camera = cam
             context.window.view_layer = vl
-            scene.render.filepath     = _filepath_with_layer(orig_filepath, vl.name)
+            scene.render.filepath     = _filepath_for_layer(scene, orig_filepath, vl.name)
             try:
                 bpy.ops.render.render(write_still=True)
             except Exception as e:
@@ -493,10 +510,17 @@ class BB_PT_LayerCameras(Panel):
             box.label(text="Renders layers separately, merges via compositor.", icon='INFO')
             box.label(text="Output → same folder as Output Path.")
         else:
+            row = layout.row(align=True)
+            row.prop(scene, "bb_output_same_as_render", text="Same as Render Settings", toggle=True)
+            row.prop(scene, "bb_output_separate_folders", text="Separate Folders", toggle=True)
+
             layout.operator("bb.render_all_layers", icon='RENDER_STILL')
             box = layout.box()
             box.scale_y = 0.7
-            box.label(text="Output → <filepath>/<LayerName>/", icon='FILE_FOLDER')
+            if scene.bb_output_separate_folders:
+                box.label(text="Output → <RenderPath>/<LayerName>/<LayerName>", icon='FILE_FOLDER')
+            else:
+                box.label(text="Output → <RenderPath>/<LayerName>", icon='FILE_FOLDER')
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +561,18 @@ def register():
         default=False,
         update=_on_intercept_toggle,
     )
+    bpy.types.Scene.bb_output_same_as_render = BoolProperty(
+        name="Same as Render Settings",
+        description="Save each layer's render as <LayerName> directly in the render output folder",
+        default=True,
+        update=_on_same_as_render_toggle,
+    )
+    bpy.types.Scene.bb_output_separate_folders = BoolProperty(
+        name="Separate Folders",
+        description="Save each layer's render as <LayerName> inside its own subfolder under the render output folder",
+        default=False,
+        update=_on_separate_folders_toggle,
+    )
 
     bpy.app.handlers.render_pre.append(_render_pre)
     bpy.app.handlers.render_post.append(_render_post)
@@ -566,6 +602,8 @@ def unregister():
 
     del bpy.types.Scene.bb_layer_cameras
     del bpy.types.Scene.bb_intercept_f12
+    del bpy.types.Scene.bb_output_same_as_render
+    del bpy.types.Scene.bb_output_separate_folders
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
