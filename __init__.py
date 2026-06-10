@@ -52,9 +52,17 @@ def _filepath_for_layer(scene, base, layer_name):
     depends on the scene's output-location settings:
       - bb_output_separate_folders: <RenderDir>/<LayerName>/<LayerName>_
       - otherwise (same as render settings): <RenderDir>/<LayerName>_
+
+    Where <RenderDir> is the render output path's directory. If the render
+    output path itself points at an existing directory (e.g. "//Images/News"
+    with no trailing slash, but "News" is a real folder), that directory is
+    used directly rather than treating "News" as a filename stub.
     """
     abs_base = bpy.path.abspath(base).rstrip('/\\')
-    out_dir  = os.path.dirname(abs_base) or abs_base
+    if os.path.isdir(abs_base):
+        out_dir = abs_base
+    else:
+        out_dir = os.path.dirname(abs_base) or abs_base
     safe_name = layer_name.replace(" ", "_").replace(".", "_")
     if scene.bb_output_separate_folders:
         out_dir = os.path.join(out_dir, safe_name)
