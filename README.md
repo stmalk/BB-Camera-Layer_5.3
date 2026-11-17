@@ -1,6 +1,6 @@
 # BB Layer Cameras
 
-I updated the original by Blender Bob by making it compatible with Blender 5.3, fixing the bug that wasn't switching layers as they rendered and I also added camera buttons so you could easily switch between layers and camera views by cliking on them. Feel free to include this version in the main one.
+I updated the original by Blender Bob by making it compatible with Blender 5.3, fixing the bug that wasn't switching layers as they rendered and I also added camera buttons so you could easily switch between layers and camera views by clicking on them. Feel free to include this version in the main one.
 
 A Blender extension that lets you assign a dedicated camera to each View Layer and automatically switches cameras at render time.
 
