@@ -2,8 +2,8 @@
 
 A Blender extension that lets you assign a dedicated camera to each View Layer and automatically switches cameras at render time.
 
-**Authors:** Blender Bob · Claude AI  
-**Blender:** 4.2+ (Extension) · also works as a legacy addon in 4.0–4.1  
+**Authors:** Blender Bob · Claude AI  · ChatGPT
+**Blender:** 5.3+ (Extension) · also works as a legacy addon in 4.0–4.1  
 **Location:** Properties → View Layer → BB Layer Cameras
 
 ---
