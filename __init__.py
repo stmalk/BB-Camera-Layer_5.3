@@ -101,6 +101,30 @@ def _get_camera(scene, layer_name):
     return None
 
 
+def _layers_need_sync(scene):
+    return ({vl.name for vl in scene.view_layers} !=
+            {item.layer_name for item in scene.bb_layer_cameras})
+
+
+def _compositor_layer_nodes(scene):
+    """Find this scene's Render Layers inputs, preserving other-scene inputs."""
+    tree = (scene.compositing_node_group if hasattr(scene, 'compositing_node_group')
+            else scene.node_tree)
+    visited = set()
+
+    def walk(tree):
+        if tree is None or tree.as_pointer() in visited:
+            return
+        visited.add(tree.as_pointer())
+        for node in tree.nodes:
+            if node.type == 'R_LAYERS' and (node.scene is None or node.scene == scene):
+                yield node
+            elif node.type == 'GROUP':
+                yield from walk(node.node_tree)
+
+    return list(walk(tree))
+
+
 # ---------------------------------------------------------------------------
 # Keymap
 # ---------------------------------------------------------------------------
@@ -155,6 +179,48 @@ class BB_OT_SyncLayers(Operator):
         return {'FINISHED'}
 
 
+class BB_OT_ActivateLayerCamera(Operator):
+    bl_idname = "bb.activate_layer_camera"
+    bl_label = "View Layer Camera"
+    bl_description = "Switch to this View Layer and look through its assigned camera"
+
+    layer_name: StringProperty(name="View Layer")
+
+    @classmethod
+    def poll(cls, context):
+        return (context.scene is not None and context.window is not None
+                and not _layers_need_sync(context.scene))
+
+    def execute(self, context):
+        scene = context.scene
+        # Recheck here as well: a shortcut must never sync the list implicitly.
+        if _layers_need_sync(scene):
+            self.report({'WARNING'}, "Click Refresh to sync View Layers first")
+            return {'CANCELLED'}
+        layer = scene.view_layers.get(self.layer_name)
+        camera = _get_camera(scene, self.layer_name)
+        if layer is None or camera is None or camera.type != 'CAMERA':
+            self.report({'WARNING'}, "Assign a camera to this View Layer first")
+            return {'CANCELLED'}
+        if scene.objects.get(camera.name) != camera:
+            self.report({'WARNING'}, "The assigned camera is not in this scene")
+            return {'CANCELLED'}
+
+        context.window.view_layer = layer
+        scene.camera = camera
+        # The button lives in Properties, so update the visible 3D editors
+        # directly rather than invoking a View3D operator in the wrong context.
+        for area in context.window.screen.areas:
+            if area.type == 'VIEW_3D':
+                space = area.spaces.active
+                if space.use_local_camera:
+                    space.camera = camera
+                if space.region_3d is not None:
+                    space.region_3d.view_perspective = 'CAMERA'
+            area.tag_redraw()
+        return {'FINISHED'}
+
+
 class BB_OT_RenderAllLayers(Operator):
     bl_idname      = "bb.render_all_layers"
     bl_label       = "BB Render All Layers"
@@ -166,7 +232,6 @@ class BB_OT_RenderAllLayers(Operator):
 
     def execute(self, context):
         global _bb_merging
-        _bb_merging = True
         scene = context.scene
         _sync(scene)
 
@@ -174,32 +239,48 @@ class BB_OT_RenderAllLayers(Operator):
         orig_single   = scene.render.use_single_layer
         orig_layer    = context.window.view_layer
         orig_filepath = scene.render.filepath
+        orig_merging  = _bb_merging
+        layer_nodes = (_compositor_layer_nodes(scene)
+                       if scene.render.use_compositing else [])
+        orig_node_layers = [(node, node.layer) for node in layer_nodes]
         errors = []
+        rendered = 0
 
-        scene.render.use_single_layer = True
         enabled_layers = [vl for vl in scene.view_layers if vl.use]
 
-        for vl in enabled_layers:
-            cam = _get_camera(scene, vl.name)
-            if cam:
-                scene.camera = cam
-            context.window.view_layer = vl
-            scene.render.filepath     = _filepath_for_layer(scene, orig_filepath, vl.name)
-            try:
-                bpy.ops.render.render(write_still=True)
-            except Exception as e:
-                errors.append(f"{vl.name}: {e}")
-
-        _bb_merging = False
-        scene.camera                  = orig_camera
-        scene.render.use_single_layer = orig_single
-        scene.render.filepath         = orig_filepath
-        context.window.view_layer     = orig_layer
+        _bb_merging = True
+        try:
+            scene.render.use_single_layer = True
+            for vl in enabled_layers:
+                try:
+                    # An unassigned layer uses the original scene camera,
+                    # never the preceding layer's assigned camera.
+                    scene.camera = _get_camera(scene, vl.name) or orig_camera
+                    context.window.view_layer = vl
+                    scene.render.filepath = _filepath_for_layer(scene, orig_filepath, vl.name)
+                    for node in layer_nodes:
+                        node.layer = vl.name
+                    result = bpy.ops.render.render(write_still=True, layer=vl.name,
+                                                   scene=scene.name)
+                    if 'CANCELLED' in result:
+                        errors.append(f"{vl.name}: render cancelled")
+                        break
+                    rendered += 1
+                except Exception as e:
+                    errors.append(f"{vl.name}: {e}")
+        finally:
+            _bb_merging = orig_merging
+            scene.camera                  = orig_camera
+            scene.render.use_single_layer = orig_single
+            scene.render.filepath         = orig_filepath
+            context.window.view_layer     = orig_layer
+            for node, layer_name in orig_node_layers:
+                node.layer = layer_name
 
         if errors:
             self.report({'WARNING'}, "Some layers failed: " + " | ".join(errors))
         else:
-            self.report({'INFO'}, f"Rendered {len(enabled_layers)} layer(s).")
+            self.report({'INFO'}, f"Rendered {rendered} layer(s).")
 
         return {'FINISHED'}
 
@@ -479,6 +560,7 @@ class BB_PT_LayerCameras(Panel):
         layout   = self.layout
         scene    = context.scene
         is_mlexr = _is_multilayer_exr(scene)
+        needs_sync = _layers_need_sync(scene)
 
         # Top row: sync + F12 intercept (disabled for multilayer EXR)
         row = layout.row(align=True)
@@ -493,6 +575,8 @@ class BB_PT_LayerCameras(Panel):
             return
 
         # Layer / camera list
+        if needs_sync:
+            layout.label(text="Click Refresh to sync View Layers before switching", icon='INFO')
         col = layout.column(align=True)
         for vl in scene.view_layers:
             item = next(
@@ -501,7 +585,18 @@ class BB_PT_LayerCameras(Panel):
             )
             row  = col.row(align=True)
             icon = 'RENDERLAYERS' if vl.use else 'LAYER_USED'
-            row.label(text=vl.name, icon=icon)
+            label = row.row(align=True)
+            button = label.row(align=True)
+            button.enabled = (not needs_sync and item is not None
+                              and item.camera is not None
+                              and scene.objects.get(item.camera.name) == item.camera)
+            op = button.operator("bb.activate_layer_camera", text="", icon=icon,
+                                 depress=(context.view_layer == vl
+                                          and item is not None
+                                          and item.camera is not None
+                                          and scene.camera == item.camera))
+            op.layer_name = vl.name
+            label.label(text=vl.name)
             if item:
                 sub = row.row(align=True)
                 sub.enabled = vl.use
@@ -538,6 +633,7 @@ class BB_PT_LayerCameras(Panel):
 classes = [
     BB_LayerCameraItem,
     BB_OT_SyncLayers,
+    BB_OT_ActivateLayerCamera,
     BB_OT_RenderAllLayers,
     BB_OT_RenderMergeMultilayer,
     BB_PT_LayerCameras,

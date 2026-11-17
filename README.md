@@ -42,7 +42,29 @@ Blender's View Layers share a single scene camera. There is no built-in way to a
 2. Click **↺** to sync the list with your current View Layers
 3. For each layer, pick the camera you want from the dropdown
 
+### Quick camera switching
+
+Click the icon to the left of a View Layer's name to activate that layer and
+look through its assigned camera in the current window's 3D viewports. The
+active layer/camera icon is highlighted. Assign a camera before using its button.
+Layers disabled for rendering can still be previewed without enabling them for render.
+
+After adding, deleting, or renaming View Layers, click **↺** before using these
+shortcuts. They stay disabled until the list is synchronized. New cameras appear
+in Blender's camera dropdown automatically; adding a collection alone does not
+change the View Layer list.
+
 ### Rendering
+
+**BB Render All Layers** renders each layer enabled for rendering with its assigned
+camera (or the original scene camera if unassigned). For each render, compositor
+Render Layers nodes referring to this scene temporarily follow the target layer,
+so the saved composite uses that layer rather than repeating a cached layer.
+Nodes referring to other scenes keep their selections. The original node layer
+selections, active layer, camera, and output settings are restored afterward.
+Compositor effects and links are retained. This batch mode applies the same
+compositing setup to each layer; compositions that intentionally combine several
+different layers should be rendered with Blender's normal render workflow.
 
 | Output Format | What to do |
 |---|---|
